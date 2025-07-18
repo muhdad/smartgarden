@@ -1,0 +1,6 @@
+streamlit
+tensorflow
+speechrecognition
+google-generativeai
+numpy
+Pillow
