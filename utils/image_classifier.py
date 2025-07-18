@@ -1,14 +1,11 @@
 import numpy as np
 import tensorflow as tf
+tflite = tf.lite
 from PIL import Image
 import json
 import os
 import cv2
 
-# Impor fungsi preprocessing yang benar untuk ResNet50
-from tensorflow.keras.applications.resnet50 import preprocess_input
-
-# 🏷️ Label + deskripsi + solusi
 label_info = {
     "belum_matang": {
         "description": "Kulit dan tangkai buah masih berwarna hijau, kulit lunak, dan belum siap panen.",
@@ -24,16 +21,15 @@ label_info = {
     }
 }
 
-# 📦 Load model dan label_map.json
 def load_model():
-    # PERBAIKAN: Nama file disederhanakan dan pesan error disesuaikan
-    model_path = "model/labu_model_resnetfinetuning (1).h5"
+    model_path = "model/labu_model.tflite"
     label_map_path = "model/label_map.json"
 
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model tidak ditemukan di path yang benar: {model_path}")
-
-    model = tf.keras.models.load_model(model_path)
+        raise FileNotFoundError(f"Model TFLite tidak ditemukan: {model_path}")
+    
+    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
 
     if os.path.exists(label_map_path):
         with open(label_map_path, "r") as f:
@@ -41,15 +37,13 @@ def load_model():
     else:
         class_names = list(label_info.keys())
 
-    return model, class_names
+    return interpreter, class_names
 
-# 🧠 Preprocessing gambar yang sudah diperbaiki
-def preprocess_image_for_prediction(image_file, target_size=224): # PERBAIKAN: Target size diubah ke 224
+def preprocess_image_for_prediction(image_file, target_size=224):
     try:
         image = Image.open(image_file).convert("RGB")
         image = np.array(image)
 
-        # Resize + padding square
         h, w = image.shape[:2]
         if h > w:
             new_h, new_w = target_size, int(w * target_size / h)
@@ -63,25 +57,26 @@ def preprocess_image_for_prediction(image_file, target_size=224): # PERBAIKAN: T
         left, right = delta_w // 2, delta_w - (delta_w // 2)
         image = cv2.copyMakeBorder(image, top, bottom, left, right,
                                    cv2.BORDER_CONSTANT, value=[0, 0, 0])
-        
-        # Enhancement (jika digunakan saat training)
-        image = cv2.convertScaleAbs(image, alpha=1.2, beta=10)
 
-        # Tambahkan dimensi batch
-        image_expanded = np.expand_dims(image, axis=0)
-        
-        # PERBAIKAN: Gunakan preprocessing bawaan ResNet50, bukan / 255.0
-        return preprocess_input(image_expanded)
+        image = cv2.convertScaleAbs(image, alpha=1.2, beta=10)
+        image = image.astype(np.float32)
+        image = np.expand_dims(image, axis=0)
+        return image
 
     except Exception as e:
         raise ValueError(f"Gambar tidak valid: {str(e)}")
 
-# 🔍 Fungsi klasifikasi akhir
 def classify_image(image_file, threshold=0.98):
     try:
-        model, class_names = load_model()
-        img_array = preprocess_image_for_prediction(image_file) # Menggunakan fungsi preprocess yang sudah benar
-        predictions = model.predict(img_array, verbose=0)
+        interpreter, class_names = load_model()
+        img_array = preprocess_image_for_prediction(image_file)
+
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        interpreter.set_tensor(input_details[0]['index'], img_array)
+        interpreter.invoke()
+        predictions = interpreter.get_tensor(output_details[0]['index'])
 
         confidence = float(np.max(predictions))
         class_idx = int(np.argmax(predictions))
@@ -95,9 +90,9 @@ def classify_image(image_file, threshold=0.98):
                     "Gambar kemungkinan bukan labu butternut."
                 )
             }
-            
+
         if label not in label_info:
-             return {
+            return {
                 "status": "invalid",
                 "message": f"Label '{label}' tidak dikenali."
             }
